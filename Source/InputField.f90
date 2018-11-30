@@ -1,0 +1,769 @@
+!***************************************************************************************
+!*                              MODULE InputField
+!***************************************************************************************
+!
+!>  \brief     Read data from input file
+!>  \details   This module is a wrapper for input data procedure. \n
+!>             Data related to an input file is store in the InputFile data type.
+!>             An input file can be opened and closed with the subs OpenFile()
+!>             and CloseFile(). The fields contained in an open input file can be
+!>             read with the subroutine  SetFieldFromInput(), specifying the
+!>             InputFile data, the name of the field to look for in the input file
+!>             and the variable where to store the input data. \n
+!>             This module allows a semi-free input format where the data are
+!>             written as " FIELDNAME : VARIABLE "
+!
+!***************************************************************************************
+!
+!>  \author           Matteo Bonfanti
+!>  \version          2.0
+!>  \date             July 2012
+!>
+!***************************************************************************************
+!
+!>   \remark         The module is based on Mark Somers' inputfiels.f90
+!
+!***************************************************************************************
+!
+!>  \par Updates
+!>  \arg 16 September 2014: implemented support for integer, string and real
+!>                          array input
+!
+!***************************************************************************************
+MODULE InputField
+#include "preprocessoptions.cpp"
+
+   PRIVATE
+   PUBLIC :: InputFile, OpenFile, CloseFile, SetFieldFromInput
+
+   INTEGER, PARAMETER, PRIVATE :: FILE_IS_OPEN   = 1
+   INTEGER, PARAMETER, PRIVATE :: FILE_IS_CLOSED = 0
+
+   !> Data type to store information on the input file.
+   TYPE InputFile
+      PRIVATE
+      CHARACTER(100) :: Name
+      INTEGER        :: Unit
+      INTEGER        :: Status = FILE_IS_CLOSED
+   END TYPE InputFile
+
+   !> A wrapper for different reading different kind of input data.
+   INTERFACE SetFieldFromInput
+      MODULE PROCEDURE SetRealFieldFromInput, &
+               SetIntegerFieldFromInput, SetStringFieldFromInput, SetLogicalFieldFromInput, &
+               SetArrayOfRealFieldFromInput, SetArrayOfStringFieldFromInput, SetArrayOfIntegersFieldFromInput
+   END INTERFACE
+
+
+!********************************************************************************************************
+   CONTAINS
+!********************************************************************************************************
+
+!*******************************************************************************
+!          OpenFile
+!*******************************************************************************
+!> Wrapper to open an input file with a given name
+!>
+!> @param Input     Data type to store the input file related variables
+!> @param FileName  Name of the file to open
+!*******************************************************************************
+   SUBROUTINE OpenFile( Input, FileName )
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT) :: Input
+      CHARACTER(*)                     :: FileName
+      LOGICAL                          :: FileExists
+
+      ! check if file of the datatype is closed
+      CALL ERROR( Input%Status == FILE_IS_OPEN, " OpenFile: trying to open already open file ", ERR_OBJ_MISUSE )
+
+      ! store input name
+      Input%Name = TRIM(ADJUSTL(FileName))
+      ! store input unit
+      Input%Unit = LookForFreeUnit()
+
+      ! Check the existence of the file
+      INQUIRE(FILE=Input%Name, EXIST=FileExists)   ! file_exists will be TRUE if the file
+      CALL ERROR( .NOT. FileExists, " OpenFile: input file " // trim(Input%Name) // " does not exist", ERR_FILE_MISSING )
+
+      ! Open file and set status of the input file as "open"
+      OPEN( FILE = Input%Name, UNIT=Input%Unit )
+      Input%Status = FILE_IS_OPEN
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG "OpenFile: File ", trim(Input%Name), " opened as unit ", NumberToString(Input%Unit)
+      __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+
+   END SUBROUTINE OpenFile
+
+
+
+
+!*******************************************************************************
+!           CloseFile
+!*******************************************************************************
+!>  Wrapper to close the input file
+!>
+!>  @param Input     Data type to store the input file related variables
+!*******************************************************************************
+   SUBROUTINE CloseFile( Input )
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT) :: Input
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG " CloseFile: Closing file ", trim(Input%Name), " opened as unit ", NumberToString(Input%Unit)
+      __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " CloseFile: using non initialised object ", ERR_OBJ_MISUSE )
+
+      ! CLose file
+      CLOSE( Input%Unit )
+
+      ! destroy file info
+      Input%Name = ""
+      ! store input unit
+      Input%Unit = 0
+
+      ! Set status of the input file as "closed"
+      Input%Status = FILE_IS_CLOSED
+
+   END SUBROUTINE CloseFile
+
+
+!*******************************************************************************
+!           SetRealFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  real variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file
+!>  @param Variable    Real variable to store input data
+!>  @param DefaultV    Default value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetRealFieldFromInput( Input, FieldName, Variable, DefaultV)
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT) :: Input
+      CHARACTER(*), INTENT(IN)         :: FieldName
+      REAL, INTENT(OUT)                :: Variable
+      REAL, INTENT(IN), OPTIONAL       :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetRealFieldFromInput: using non initialised object ", ERR_OBJ_MISUSE )
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG " Looking for real field ", trim(FieldName), " in unit ", NumberToString(Input%Unit)
+      __CLOSE_LOG_FILE
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetRealFieldFromInput: could not find field "//TRIM(FieldName), ERR_INP_READ )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Found field ", trim(FieldName); __CLOSE_LOG_FILE
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//",F200.0)"
+            ! store the value of the variable
+            READ(  Input%Unit, RdFormat ) String, Variable
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Set variable equal to ", Variable
+            __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetRealFieldFromInput
+
+!*******************************************************************************
+!           SetIntegerFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  integer variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file
+!>  @param Variable    Integer variable to store input data
+!>  @param DefaultV    Default value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetIntegerFieldFromInput( Input, FieldName, Variable, DefaultV)
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT) :: Input
+      CHARACTER(*), INTENT(IN)         :: FieldName
+      INTEGER, INTENT(OUT)             :: Variable
+      INTEGER, INTENT(IN), OPTIONAL    :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetIntegerFieldFromInput: using non initialised object ", ERR_OBJ_MISUSE )
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG " Looking for integer field ", trim(FieldName), " in unit ", NumberToString(Input%Unit)
+      __CLOSE_LOG_FILE
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetIntegerFieldFromInput: could not find field "//TRIM(FieldName), ERR_INP_READ )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Found field ", trim(FieldName); __CLOSE_LOG_FILE
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//",I200)"
+            ! store the value of the variable
+            READ(  Input%Unit, RdFormat ) String, Variable
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Set variable equal to ", Variable
+            __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetIntegerFieldFromInput
+
+
+!*******************************************************************************
+!           SetStringFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  character variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file
+!>  @param Variable    Character variable to store input data
+!>  @param DefaultV    Default value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetStringFieldFromInput( Input, FieldName, Variable, DefaultV)
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT) :: Input
+      CHARACTER(*), INTENT(IN)         :: FieldName
+      CHARACTER(*), INTENT(OUT)          :: Variable
+      CHARACTER(*), INTENT(IN), OPTIONAL :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetStringFieldFromInput: using non initialised object ", ERR_OBJ_MISUSE )
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG " Looking for string field ", trim(FieldName), " in unit ", NumberToString(Input%Unit)
+      __CLOSE_LOG_FILE
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetStringFieldFromInput: could not find field "//TRIM(FieldName), ERR_INP_READ )
+            ELSE
+               Variable = trim(DefaultV)
+               WRITE(String,*) trim(DefaultV)
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Found field ", trim(FieldName); __CLOSE_LOG_FILE
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//",A)"
+            ! store the value of the variable
+            READ(  Input%Unit, RdFormat ) String, Variable
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Set variable equal to ", Variable
+            __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetStringFieldFromInput
+
+!*******************************************************************************
+!           SetLogicalFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  boolean variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file
+!>  @param Variable    Logical variable to store input data
+!>  @param DefaultV    Default value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetLogicalFieldFromInput( Input, FieldName, Variable, DefaultV)
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT) :: Input
+      CHARACTER(*), INTENT(IN)         :: FieldName
+      LOGICAL, INTENT(OUT)             :: Variable
+      LOGICAL, INTENT(IN), OPTIONAL    :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetLogicalFieldFromInput: using non initialised object ", ERR_OBJ_MISUSE )
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG " Looking for boolean field ", trim(FieldName), " in unit ", NumberToString(Input%Unit)
+      __CLOSE_LOG_FILE
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetLogicalFieldFromInput: could not find field "//TRIM(FieldName), ERR_INP_READ )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Found field ", trim(FieldName); __CLOSE_LOG_FILE
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//",L200)"
+            ! store the value of the variable
+            READ(  Input%Unit, RdFormat ) String, Variable
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Set variable equal to ", Variable
+            __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetLogicalFieldFromInput
+
+
+!*******************************************************************************
+!           SetArrayOfRealFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  array of real variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file
+!>  @param Variable    Real array variable to store input data
+!>  @param DefaultV    Default real array value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetArrayOfRealFieldFromInput( Input, FieldName, Variable, DefaultV)
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT)          :: Input
+      CHARACTER(*), INTENT(IN)                  :: FieldName
+      REAL, DIMENSION(:), INTENT(OUT)           :: Variable
+      REAL, DIMENSION(:), INTENT(IN), OPTIONAL  :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetArrayOfRealFieldFromInput: using non initialised object ", ERR_OBJ_MISUSE )
+
+      ! If present, default value should be of the same dimension as the variable to set
+      IF ( PRESENT( DefaultV ) ) CALL ERROR( SIZE(DefaultV) /= SIZE(Variable), &
+                                       " SetArrayOfRealFieldFromInput: wrong dimension of the default value " )
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG " Looking for array of reals field ", trim(FieldName), " in unit ", NumberToString(Input%Unit)
+      __CLOSE_LOG_FILE
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetArrayOfRealFieldFromInput: could not find field "//TRIM(FieldName), ERR_INP_READ )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Found field ", trim(FieldName); __CLOSE_LOG_FILE
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//")"
+            ! read first part of the line with field name
+            READ(  Input%Unit, RdFormat, ADVANCE='NO' ) String
+            ! store the value of the variable
+            READ(  Input%Unit, * ) Variable
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Set variable equal to ", Variable
+            __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetArrayOfRealFieldFromInput
+
+
+
+!*******************************************************************************
+!           SetArrayOfStringFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  array of strings variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file
+!>  @param Variable    String array variable to store input data
+!>  @param DefaultV    Default string array value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetArrayOfStringFieldFromInput( Input, FieldName, Variable, DefaultV)
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT)                  :: Input
+      CHARACTER(*), INTENT(IN)                          :: FieldName
+      CHARACTER(*), DIMENSION(:), INTENT(OUT)           :: Variable
+      CHARACTER(*), DIMENSION(:), INTENT(IN), OPTIONAL  :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetArrayOfStringFieldFromInput: using non initialised object ", ERR_OBJ_MISUSE )
+
+      ! If present, default value should be of the same dimension as the variable to set
+      IF ( PRESENT( DefaultV ) ) CALL ERROR( SIZE(DefaultV) /= SIZE(Variable), &
+                                       " SetArrayOfStringFieldFromInput: wrong dimension of the default value " )
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG " Looking for array of strings field ", trim(FieldName), " in unit ", NumberToString(Input%Unit)
+      __CLOSE_LOG_FILE
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetArrayOfStringFieldFromInput: could not find field "//TRIM(FieldName), ERR_INP_READ )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Found field ", trim(FieldName); __CLOSE_LOG_FILE
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//")"
+            ! read first part of the line with field name
+            READ(  Input%Unit, RdFormat, ADVANCE='NO' ) String
+            ! store the value of the variable
+            READ(  Input%Unit, * ) Variable
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Set variable equal to ", Variable
+            __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetArrayOfStringFieldFromInput
+
+
+!*******************************************************************************
+!           SetArrayOfIntegersFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  array of real variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file
+!>  @param Variable    Real array variable to store input data
+!>  @param DefaultV    Default real array value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetArrayOfIntegersFieldFromInput( Input, FieldName, Variable, DefaultV )
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT)          :: Input
+      CHARACTER(*), INTENT(IN)                  :: FieldName
+      INTEGER, DIMENSION(:), INTENT(OUT)           :: Variable
+      INTEGER, DIMENSION(:), INTENT(IN), OPTIONAL  :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetArrayOfIntegersFieldFromInput: using non initialised obj", ERR_OBJ_MISUSE )
+
+      ! If present, default value should be of the same dimension as the variable to set
+      IF ( PRESENT( DefaultV ) ) CALL ERROR( SIZE(DefaultV) /= SIZE(Variable), &
+                                       " SetArrayOfIntegersFieldFromInput: wrong dimension of the default value " )
+
+#if defined(LOG_FILE)
+      __OPEN_LOG_FILE;
+      __WRITE_TO_LOG " Looking for array of integers field ", trim(FieldName), " in unit ", NumberToString(Input%Unit)
+      __CLOSE_LOG_FILE
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetArrayOfIntegersFieldFromInput: could not find field "//TRIM(FieldName), ERR_INP_READ )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Found field ", trim(FieldName); __CLOSE_LOG_FILE
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//")"
+            ! read first part of the line with field name
+            READ(  Input%Unit, RdFormat, ADVANCE='NO' ) String
+            ! store the value of the variable
+            READ(  Input%Unit, * ) Variable
+#if defined(LOG_FILE)
+            __OPEN_LOG_FILE; __WRITE_TO_LOG " Set variable equal to ", Variable
+            __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetArrayOfIntegersFieldFromInput
+
+END MODULE InputField
