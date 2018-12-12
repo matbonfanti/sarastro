@@ -53,7 +53,7 @@ MODULE PsiObject
 
    PUBLIC :: PsiPlusDeltaPsi
 !    PUBLIC :: ASSIGNMENT(=), OPERATOR(+), OPERATOR(*)  ! Overloaded operators
-! 
+!
 !    INTERFACE ASSIGNMENT (=)           ! Assigment between two WaveFunct or two Derivatives   Psi1 = Psi2
 !       MODULE PROCEDURE CopyPsi, CopyDerivative
 !    END INTERFACE
@@ -61,7 +61,7 @@ MODULE PsiObject
 !    INTERFACE OPERATOR (+)             ! Sum of two derivatives                   DeltaPsi1 + DeltaPsi2
 !       MODULE PROCEDURE SumDerivatives
 !    END INTERFACE
-! 
+!
 !    INTERFACE OPERATOR (*)             ! Multiplication of derivative by scalar   alpha * DeltaPsi1
 !       MODULE PROCEDURE MultiplyDerivativeByScalar
 !    END INTERFACE
@@ -89,7 +89,7 @@ MODULE PsiObject
    INTEGER, PUBLIC, PARAMETER :: EOM_STANDARD            = 1, &  ! standard EOMs: (1-P) in the parameter equations
                                  EOM_INVERSE             = 2, &  ! alternative set of EOMs: (1-P) in the coefficient equations
                                  EOM_SINGLEINV           = 3     ! alternative set of EOMs: coeffs and pars are obtained by single inversion
-                                 
+
    !===========================================================================================================
 
    !> Data type to store the information on the wavefunction at given time.
@@ -152,19 +152,25 @@ MODULE PsiObject
    ! ==============================================================
    ! FINE SETUP FOR THE DEFINITION OF THE EQUATIONS OF MOTION
    ! ==============================================================
-   
+
    ! Type of equation of motions used for the propagation
    INTEGER :: EquationType          = EOM_STANDARD
    ! Flag to use the form of the equations with the simplification of the coefficients from the C matrix
    LOGICAL :: SimplifyCoefficients  = .FALSE.
    !> threshold that defines the regularization of the inversion of the coefficients vector
    REAL    :: SimplifyThreshold
-                    
-   ! Freeze gaussians with low populations 
+
+   ! Freeze gaussians with low populations
    !> logical variable to activate the freezing of the low-populated gaussians
    LOGICAL :: FreezeLowPopGaussians  = .FALSE.
    !> thresholds that define which gaussian to freeze
    REAL    ::  PopMinThreshold, PopMaxThreshold
+
+   ! Freeze gaussians with low abs(coefficients)
+   !> logical variable to activate the freezing of the low-coefficient gaussians
+   LOGICAL :: FreezeLowCoeffGaussians  = .FALSE.
+   !> thresholds that define which gaussian to freeze
+   REAL    ::  CoeffMinThreshold
 
    ! Following arrays define which gaussian configurations are frozen during the dynamics
    INTEGER, DIMENSION(:), ALLOCATABLE, SAVE, PUBLIC  ::  CMask
@@ -188,13 +194,13 @@ MODULE PsiObject
       INTEGER, INTENT(IN) :: PrimitiveId, GauDim
       Prim2Dim = MOD(PrimitiveId-1, GauDim) + 1
    END FUNCTION Prim2Dim
-   
+
    INTEGER FUNCTION Cfg2Prim( Cfg, iDimen, GauDim )
       IMPLICIT NONE
       INTEGER, INTENT(IN) :: Cfg, iDimen, GauDim
       Cfg2Prim = (Cfg-1)*GauDim + iDimen
    END FUNCTION Cfg2Prim
-   
+
    FUNCTION CfgSec( Cfg, GauDim )  RESULT( Indices )
       IMPLICIT NONE
       INTEGER, INTENT(IN) :: Cfg, GauDim
@@ -202,7 +208,7 @@ MODULE PsiObject
       INTEGER :: i
       Indices = (/ ( (Cfg-1)*GauDim+i, i = 1, GauDim  ) /)
    END FUNCTION CfgSec
-   
+
    INTEGER FUNCTION CfgBeg( Cfg, GauDim )
       IMPLICIT NONE
       INTEGER, INTENT(IN) :: Cfg, GauDim
@@ -522,23 +528,24 @@ MODULE PsiObject
 !> Compute derivative of an input wavefunction and store it in a new instance
 !> of the Derivative object.
 !>
-!> @param    InpEquationType 
+!> @param    InpEquationType
 !> @param    InpPopThreshold
 !> @param    InpPopThreshold
-!*******************************************************************************   
-   SUBROUTINE EquationsOfMotionSetup( InpEquationType, InpSimplifyCoeffs, InpPopThreshold )
+!*******************************************************************************
+   SUBROUTINE EquationsOfMotionSetup( InpEquationType, InpSimplifyCoeffs, InpPopThreshold, InpCoeffThreshold )
       IMPLICIT NONE
       INTEGER, INTENT(IN)                        ::  InpEquationType
       LOGICAL, INTENT(IN)                        ::  InpSimplifyCoeffs
       REAL, DIMENSION(2), INTENT(IN), OPTIONAL   ::  InpPopThreshold
-      
+      REAL, INTENT(IN), OPTIONAL                 ::  InpCoeffThreshold
+
       ! Define the type of equations
       EquationType = InpEquationType
       
       ! Set flag to simplify the coefficients from the expression of the C matrix
       SimplifyCoefficients = InpSimplifyCoeffs
       SimplifyThreshold    = 1.E-8
-      
+
       ! Set flag to freeze the Gaussian depending on the populations
       IF ( PRESENT(InpPopThreshold) ) THEN
          FreezeLowPopGaussians = .TRUE.
@@ -547,11 +554,17 @@ MODULE PsiObject
       ELSE
          FreezeLowPopGaussians = .FALSE.
       END IF
-      
+
+      ! Set flag to freeze the Gaussian depending on the coefficients
+      IF ( PRESENT(InpCoeffThreshold) ) THEN
+         FreezeLowCoeffGaussians = .TRUE.
+         CoeffMinThreshold = InpCoeffThreshold
+      END IF
+
 #if defined(LOG_FILE)
       __OPEN_LOG_FILE;
       __WRITE_TO_LOG "EquationsOfMotionSetup: setup of the equations of motion done "
-      SELECT CASE( EquationType ) 
+      SELECT CASE( EquationType )
          CASE(EOM_STANDARD)
             __WRITE_TO_LOG "EquationsOfMotionSetup: using standard equations of motion "
          CASE(EOM_INVERSE)
@@ -562,10 +575,10 @@ MODULE PsiObject
          __WRITE_TO_LOG "WritePsiToFile: fixing GWPs with Mulliken populations in the interval", PopMinThreshold, " - ", PopMaxThreshold
       END IF
       __WHITELINE_TO_LOG; __CLOSE_LOG_FILE
-#endif   
+#endif
    END SUBROUTINE EquationsOfMotionSetup   
 
-   
+
 !*******************************************************************************
 !          ComputeDerivative
 !*******************************************************************************
@@ -585,15 +598,15 @@ MODULE PsiObject
       TYPE(OperatorData), INTENT(IN)   :: Hamiltonian
       REAL, INTENT(IN)                 :: ActualTime
       REAL, DIMENSION(2), OPTIONAL, INTENT(OUT)  :: InvMatCondNr
-      
+
       ! Set initial time
-      CALL StartTimer(DerivativesClock)      
+      CALL StartTimer(DerivativesClock)
 
       ! Check incompatibility between the EOM scheme chosen and the type of WF
       IF ( SimplifyCoefficients .AND. PsiDeriv%WFType == vMCG_SINGLESET ) THEN
          CALL AbortWithError( " ComputeDerivative: coeff. simplification cannot be used with single-set WF", ERR_MODULE_SETUP )
       END IF
-      
+
       ! In case derivative has not been setup, allocate memory with the correct dimensionality of the wavefunction
       IF ( .NOT. PsiDeriv%DerivativeIsSetup ) THEN
 
@@ -620,7 +633,7 @@ MODULE PsiObject
          ! ADD CHECK ON THE ACTUAL DIMENSIONS
          ! *****************************************************
       END IF
-      
+
       ! Evaluate derivatives using the appropriate subroutine depending on the EOM type chosen
       IF ( EquationType == 1 ) THEN
           CALL ComputeDerivative_OldScheme(  Psi, PsiDeriv, Hamiltonian, ActualTime, InvMatCondNr )
@@ -632,7 +645,7 @@ MODULE PsiObject
 
       ! Set final time
       CALL StopTimer(DerivativesClock)
-      
+
    END SUBROUTINE ComputeDerivative
       
    SUBROUTINE ComputeDerivative_OldScheme( Psi, PsiDeriv, Hamiltonian, ActualTime, InvMatCondNr )
@@ -653,9 +666,9 @@ MODULE PsiObject
       ! TEMPORARY MEMORY FOR DERIVATIVE CONSTRUCTION: Matrices for the gaussian coefficients derivatives
       COMPLEX, DIMENSION(:,:,:), ALLOCATABLE   ::  OverlapInv   ! inverse  of the overlap matrix
       COMPLEX, DIMENSION(:), ALLOCATABLE       ::  CoeffRHS     ! R.H.S of the coefficient equation
-      
+
       ! TEMPORARY MEMORY FOR DERIVATIVE CONSTRUCTION: Matrices for the gaussian parameters derivatives
-      COMPLEX, DIMENSION(:,:), ALLOCATABLE     ::  CMatrix      ! C matrix 
+      COMPLEX, DIMENSION(:,:), ALLOCATABLE     ::  CMatrix      ! C matrix
       COMPLEX, DIMENSION(:,:), ALLOCATABLE     ::  CMatrixInv   ! inverse of the  C matrix
       COMPLEX, DIMENSION(:), ALLOCATABLE       ::  YVector      ! Y vector
 
@@ -663,7 +676,7 @@ MODULE PsiObject
       INTEGER :: iElL,   iElR            ! Indices for loops over the electronic states
       INTEGER :: iCfgL,  iCfgR           ! Indices for loops over the GWPs
       INTEGER :: iDR,    iDL,    iD      ! Indices for loops over the dimensions of the system
-      INTEGER :: iPrimR, iPrimL          ! Indices for loops over the primitive Gaussian functions 
+      INTEGER :: iPrimR, iPrimL          ! Indices for loops over the primitive Gaussian functions
       INTEGER :: GauSet                  ! Index which defines the Gaussian set considered in the current iteration
       INTEGER :: iPtr,   jPtr            ! Integer index pointers
       INTEGER( SHORT_INTEGER_KIND )   :: NShort  ! Integer index for LAPACK calls
@@ -671,7 +684,7 @@ MODULE PsiObject
       ! other complex and real variables
       COMPLEX :: OverIFactor, Rho, HAlpha, TauMatrix
       REAL    :: InvCondNr, CMatrixCondMin, OvMatrixCondMin
-      
+
       ! Compute 1/i (=-i) factor which is in the equations of motion
       OverIFactor = CMPLX(0.0,-1.0)
 
@@ -680,7 +693,7 @@ MODULE PsiObject
       ! ***************************************************************************************
 
       ALLOCATE( HMatrix(Psi%NrCfg,Psi%NrCfg,Psi%NrStates,Psi%NrStates), OverlapInv(Psi%NrCfg,Psi%NrCfg,Psi%NrGauSets) )
-      
+
       ! 1) Compute Inverse of the Gaussians Overlap
       OvMatrixCondMin = 1.E+99
       DO GauSet = 1, Psi%NrGauSets
@@ -696,7 +709,7 @@ MODULE PsiObject
 
       ! 2) Calculate Hamiltonian matrix over configurations
       HMatrix = GetOperatorMatrix( Hamiltonian, Psi )
-     
+
       ! ***************************************************************************************
       ! Compute the derivatives of Psi parameters and store them in PsiDeriv%GaussPar
       ! ***************************************************************************************
@@ -704,12 +717,12 @@ MODULE PsiObject
       ALLOCATE( SbetaDotSinv(Psi%NrPrimGau,Psi%NrCfg), ProjGDeriv(Psi%NrPrimGau,Psi%NrPrimGau), &
                 ProjHamilt(Psi%NrPrimGau,Psi%NrCfg), FirstMom(Psi%NrCfg,Psi%NrPrimGau) )
       ALLOCATE(  CMatrix(Psi%NrPrimGau,Psi%NrPrimGau), CMatrixInv(Psi%NrPrimGau,Psi%NrPrimGau), YVector(Psi%NrPrimGau) )
-                
+
       CALL StartTimer(GaussDerivClock)
       CMatrixCondMin = 1.E+99
-      
+
       DO GauSet = 1, Psi%NrGauSets     ! left loop over the GWP sets (1 for single set, NrStates for multi-set)
-         
+
          ! Matrix with the first moments of the configurations products < g_alpha | x_i | g_beta >
          FirstMom(:,:) = CMPLX(0.0, 0.0)
          DO iCfgR = 1, Psi%NrCfg       ! loop over right configuration / diagonal configuration
@@ -726,7 +739,7 @@ MODULE PsiObject
             END DO
          END DO
 
-         ! Construct for current GWP set some preliminary matrix: S^{beta,0} * S^{-1} and  S^{beta,0} * S^{-1} * S^{0,alpha} 
+         ! Construct for current GWP set some preliminary matrix: S^{beta,0} * S^{-1} and  S^{beta,0} * S^{-1} * S^{0,alpha}
          CALL TheOneWithMatrixMultiplication(SbetaDotSinv, FirstMom(:,:), OverlapInv(:,:,GauSet), "C","N")
          CALL TheOneWithMatrixMultiplication(ProjGDeriv, SbetaDotSinv(:,:), FirstMom(:,:), "N","N")
 
@@ -744,7 +757,7 @@ MODULE PsiObject
                      Rho = CONJG(Psi%Bvector(iCfgL, GauSet)) * Psi%Bvector(iCfgR, GauSet)
                   END IF
                ELSE                                      ! DEFINE RHO ELEMENT: for single-set it is defined as trace over the states
-                  Rho = TheOneWithVectorDotVector(Psi%Bvector(iCfgL, :), Psi%Bvector(iCfgR, :)) 
+                  Rho = TheOneWithVectorDotVector(Psi%Bvector(iCfgL, :), Psi%Bvector(iCfgR, :))
                END IF
                DO iDL = 1,  Psi%GDim          ! loop over the dimensions for left derivative
                   iPrimL = Cfg2Prim(iCfgL, iDL, Psi%GDim)
@@ -789,7 +802,7 @@ MODULE PsiObject
                   END DO
                END DO
             END DO
-            
+
          ! Now single set: construct a single Y array by summing over electronic coordinates, weighted by the rho matrix
          ELSE IF ( Psi%WFType == vMCG_SINGLESET ) THEN
 
@@ -813,9 +826,9 @@ MODULE PsiObject
                   END DO
                END DO
             END DO
-            
+
          END IF
-        
+
          ! invert C-matrix
          CALL MatrixInversionDo( CMatrix(:,:), CMatrixInv(:,:), 2, InvCondNr, CMask(1:NInv) )
          IF ( InvCondNr < CMatrixCondMin ) CMatrixCondMin = InvCondNr
@@ -837,9 +850,9 @@ MODULE PsiObject
                IF ( ABS(Psi%Bvector(iCfgL, GauSet)) <= SimplifyThreshold ) THEN
                   PsiDeriv%GaussPar(2, CMask(iPrimL), GauSet) = CONJG(Psi%Bvector(iCfgL, GauSet))*PsiDeriv%GaussPar(2, CMask(iPrimL), GauSet) &
                        / ( ABS(Psi%Bvector(iCfgL, GauSet))**2 + SimplifyThreshold**2 )
-               ELSE 
+               ELSE
                   PsiDeriv%GaussPar(2, CMask(iPrimL), GauSet) = PsiDeriv%GaussPar(2, CMask(iPrimL), GauSet) / Psi%Bvector(iCfgL, GauSet)
-               END IF 
+               END IF
             END DO
          END IF
 
@@ -851,14 +864,14 @@ MODULE PsiObject
          END DO
 
       END DO
-       
+
       CALL StopTimer(GaussDerivClock)
 
       ! ***************************************************************************************
       ! Now compute the derivatives of Psi coefficients and store them in PsiDeriv%BVector
       ! ***************************************************************************************
 
-      ALLOCATE( CoeffRHS(Psi%NrCfg) ) 
+      ALLOCATE( CoeffRHS(Psi%NrCfg) )
 
       CALL StartTimer(BVecDerivClock)
 
@@ -866,7 +879,7 @@ MODULE PsiObject
 
          ! Initialize vector to zero
          PsiDeriv%BVector(:,iElL) = CMPLX(0.0,0.0)
-      
+
          ! Define the Gaussian set for the overlap and the tau matrix depending on the type of wavefunction
          IF ( Psi%WFType == vMCG_MULTISET ) THEN
             GauSet = iElL
@@ -877,8 +890,8 @@ MODULE PsiObject
          CoeffRHS(:) = CMPLX(0.0,0.0)
          DO iCfgL = 1, Psi%NrCfg
             DO iCfgR = 1, Psi%NrCfg
-            
-               ! Construct the iCfgL,iCfgR element of the Tau matrix for the GauSet gaussian set 
+
+               ! Construct the iCfgL,iCfgR element of the Tau matrix for the GauSet gaussian set
                TauMatrix = CMPLX(0.0,0.0)
                DO iDR = 1,  Psi%GDim          ! loop over the dimensions for right derivative
                   iPrimR = Cfg2Prim( iCfgR, iDR, Psi%GDim )
@@ -887,30 +900,30 @@ MODULE PsiObject
                                  PsiPrimMoment( 1, Psi,iCfgL,iCfgR,iDR,GauSet,GauSet ) * PsiDeriv%GaussPar(2,iPrimR,GauSet)   + &
                                  PsiPrimMoment( 2, Psi,iCfgL,iCfgR,iDR,GauSet,GauSet ) * PsiDeriv%GaussPar(1,iPrimR,GauSet)       )
                END DO
-               
+
                ! Sum over the right electronic state, 1/i*hbar (H - tau) B
                DO iElR = 1, Psi%NrStates
                   IF ( iElR == iElL ) THEN
-                     CoeffRHS(iCfgL) = CoeffRHS(iCfgL) + ( OverIFactor * HMatrix(iCfgL,iCfgR,iElL,iElR) - TauMatrix ) * Psi%Bvector(iCfgR, iElR) 
+                     CoeffRHS(iCfgL) = CoeffRHS(iCfgL) + ( OverIFactor * HMatrix(iCfgL,iCfgR,iElL,iElR) - TauMatrix ) * Psi%Bvector(iCfgR, iElR)
                   ELSE IF ( iElR /= iElL ) THEN
                      CoeffRHS(iCfgL) = CoeffRHS(iCfgL) + OverIFactor * HMatrix(iCfgL,iCfgR,iElL,iElR) * Psi%Bvector(iCfgR, iElR)
                   END IF
                END DO
-               
+
             END DO
          END DO
-         
+
          ! Now for fixed iElL the sum over iElR is over, and we can transform with the inverse overlap
          PsiDeriv%BVector(:,iElL) = TheOneWithMatrixVectorProduct( OverlapInv(:,:,GauSet), CoeffRHS )
-      END DO      
-      
+      END DO
+
       CALL StopTimer(BVecDerivClock)
 
       ! If required, return the inverse condition number of the inverted matrices
       IF ( PRESENT( InvMatCondNr ) ) InvMatCondNr(:) = (/ OvMatrixCondMin , CMatrixCondMin /)
 
       DEALLOCATE( HMatrix, OverlapInv )
-      DEALLOCATE( CoeffRHS, SbetaDotSinv, ProjGDeriv, ProjHamilt, FirstMom ) 
+      DEALLOCATE( CoeffRHS, SbetaDotSinv, ProjGDeriv, ProjHamilt, FirstMom )
       DEALLOCATE( CMatrix, CMatrixInv, YVector )
 
    END SUBROUTINE ComputeDerivative_OldScheme
@@ -951,21 +964,21 @@ MODULE PsiObject
       ALLOCATE( rhs2(1:NInv), temp(1:NInv), temp2(1:NInv) )
 
       ! DEFINITIONS:
-      
+
       ! GWPS are here rewritten in the form (definitions are the same, it is just rearrangment of 0th order terms)
       ! G = exp( a x**2 + xi * (x-x_0) + Norm(a,RE(xi))  )
-      
+
       ! HMatrix = matrix element of the Hamiltonian with GWPs              < G_i | H | G_j >
       ! MMatrix = overlap between partial derivative and GWP               < partial_alpha G_i | G_j >
       ! dHMatrix = Hamiltonian matrix element between part deriv and GWP   < partial_alpha G_i | H | G_j >
       ! TMatrix = overlap between partial derivatives                      < partial_alpha G_i | partial_beta G_j >
-      
+
       ! ***************************************************************************************
       ! Now compute the derivatives of Psi coefficients/parameters and store them in PsiDeriv
       ! ***************************************************************************************
 
       iEl = 1      ! single set calculation
-      
+
       ! First compute some matrices which are used more than once:
       ! Construct HMatrix
       HMatrix = GetOperatorMatrix( Hamiltonian, Psi )
@@ -999,7 +1012,7 @@ MODULE PsiObject
                ELSE IF ( .NOT. SimplifyCoefficients ) THEN
                   Rho = CONJG(Psi%BVector(iCfg,iEl)) * Psi%BVector(jCfg,iEl)
                END IF
-              
+
                IF ( iD == jD ) THEN
                   TMatrix(iOcc,jOcc) = ( PsiPrimMoment( 2, Psi,iCfg,jCfg,iD,iEl,iEl) - &
       Psi%qCoord(iPrm,iEl)*PsiPrimMoment( 1, Psi,iCfg,jCfg,jD,iEl,iEl) - Psi%qCoord(jPrm,iEl)*PsiPrimMoment( 1, Psi,iCfg,jCfg,iD,iEl,iEl) + &
@@ -1008,7 +1021,7 @@ MODULE PsiObject
                   TMatrix(iOcc,jOcc) = ( PsiPrimMoment( 1, Psi,iCfg,jCfg,iD,iEl,iEl) - Psi%qCoord(iPrm,iEl)) * &
                   ( PsiPrimMoment( 1, Psi,iCfg,jCfg,jD,iEl,iEl) - Psi%qCoord(jPrm,iEl) ) * Psi%Overlap(iCfg,jCfg,iEl,iEl) *  Rho
                END IF
-                  
+
          END DO
       END DO
 
@@ -1075,12 +1088,12 @@ MODULE PsiObject
             iPrm = CMask(iOcc); iCfg = Prim2Cfg(iPrm, Psi%GDim)
             IF ( ABS(Psi%Bvector(iCfg, iEl)) <= SimplifyThreshold ) THEN
                temp(iOcc) = CONJG(Psi%Bvector(iCfg, iEl))*temp(iOcc) / ( ABS(Psi%Bvector(iCfg, iEl))**2 + SimplifyThreshold**2 )
-            ELSE 
+            ELSE
                temp(iOcc) = temp(iOcc) / Psi%Bvector(iCfg, iEl)
-            END IF 
+            END IF
          END DO
       END IF
-      
+
       PsiDeriv%GaussPar(:, :, iEl) = CMPLX( 0.0, 0.0 )
       DO iOcc = 1, NInv
          iPrm = CMask(iOcc)
@@ -1109,12 +1122,12 @@ MODULE PsiObject
 
       COMPLEX, DIMENSION(:,:), ALLOCATABLE       ::  VMatrix, HMatrix, VMatrixInv
       COMPLEX, DIMENSION(:), ALLOCATABLE         ::  ZVector, Solution
-      
+
       INTEGER :: iEl
       INTEGER :: iCfg, iD, iPrm, iOcc
       INTEGER :: jCfg, jD, jPrm, jOcc
       INTEGER( SHORT_INTEGER_KIND )   :: NShort  ! Integer index for LAPACK calls
-      
+
       COMPLEX :: OverIFactor
       REAL    :: ConditionNr
       COMPLEX :: Rho, dHMatrix
@@ -1124,9 +1137,9 @@ MODULE PsiObject
 
       CALL StartTimer(BVecDerivClock)
 
-      ! Only single surface calculation 
+      ! Only single surface calculation
       iEl = 1
-      
+
       ! Allocate memory to store the various integrals contained in the equations of motion
       ALLOCATE( VMatrix(1:Psi%NrCfg+NInv,1:Psi%NrCfg+NInv), ZVector(1:Psi%NrCfg+NInv), HMatrix(1:Psi%NrCfg,1:Psi%NrCfg) )
       ALLOCATE( VMatrixInv(1:Psi%NrCfg+NInv,1:Psi%NrCfg+NInv), Solution(1:Psi%NrCfg+NInv) )
@@ -1141,7 +1154,7 @@ MODULE PsiObject
             VMatrix(iCfg,jCfg) = Psi%Overlap(iCfg,jCfg,iEl,iEl)
          END DO
       END DO
-      
+
       ! - second block, overlap between derivatives of Gaussian configurations
       DO jOcc = 1, NInv
          jPrm = CMask(jOcc); jCfg = Prim2Cfg( jPrm, Psi%GDim ); jD = Prim2Dim( jPrm, Psi%GDim )
@@ -1162,9 +1175,9 @@ MODULE PsiObject
             END IF
          END DO
       END DO
-      
+
       ! - off-diagonal block, overlap between GWPs and their derivatives
-      DO iCfg = 1, Psi%NrCfg  
+      DO iCfg = 1, Psi%NrCfg
          DO jOcc = 1, NInv
             jPrm = CMask(jOcc); jCfg = Prim2Cfg( jPrm, Psi%GDim ); jD = Prim2Dim( jPrm, Psi%GDim )
             IF ( SimplifyCoefficients ) THEN
@@ -1177,11 +1190,11 @@ MODULE PsiObject
       END DO
 
       ! ***************************************************************************************
-      ! Now compute the Z vector 
+      ! Now compute the Z vector
       ! ***************************************************************************************
-      
+
       ZVector = CMPLX(0.0,0.0)
-      
+
       ! First part of the vector is composed by the H matrix elements of the configurations SUM_j < G_i | H | G_j > A_j
       DO jCfg = 1, Psi%NrCfg
          ! Diagonal element
@@ -1194,7 +1207,7 @@ MODULE PsiObject
             HMatrix(iCfg,jCfg) = OperatorMatrixElement(Hamiltonian, Psi%GaussPar(:,CfgBeg(iCfg,Psi%GDim):CfgEnd(iCfg,Psi%GDim),iEl),    &
                 Psi%GaussPar(:,CfgBeg(jCfg,Psi%GDim):CfgEnd(jCfg,Psi%GDim),iEl), iEl, iEl )
             HMatrix(jCfg,iCfg) = CONJG(HMatrix(iCfg,jCfg))
-            ZVector(iCfg) = ZVector(iCfg) + HMatrix(iCfg,jCfg) * Psi%BVector(jCfg,iEl) 
+            ZVector(iCfg) = ZVector(iCfg) + HMatrix(iCfg,jCfg) * Psi%BVector(jCfg,iEl)
             ZVector(jCfg) = ZVector(jCfg) + CONJG(HMatrix(iCfg,jCfg)) * Psi%BVector(iCfg,iEl)
          END DO
       END DO
@@ -1208,23 +1221,23 @@ MODULE PsiObject
             IF ( SimplifyCoefficients ) THEN
                Rho = Psi%BVector(jCfg,iEl)
             ELSE IF ( .NOT. SimplifyCoefficients ) THEN
-               Rho = CONJG(Psi%BVector(iCfg,iEl))*Psi%BVector(jCfg,iEl) 
+               Rho = CONJG(Psi%BVector(iCfg,iEl))*Psi%BVector(jCfg,iEl)
             END IF
             ZVector(Psi%NrCfg+iOcc) = ZVector(Psi%NrCfg+iOcc) + Rho * dHMatrix
          END DO
       END DO
-      
+
       ! ***************************************************************************************
       ! Now solve the equation
       ! ***************************************************************************************
-      
+
       ! Invert TMatrix and store the inverse in TMatrixInv (Only upper diagonal is computed by MatrixInversionDo!!!)
       CALL MatrixInversionDo( VMatrix, VMatrixInv, 1, ConditionNr )
-      
+
       ! Now multiply RHS by inverse matrix to get the solution of the linear equation
       NShort = Psi%NrCfg+NInv
       CALL ZHEMV("U", NShort, CMPLX(1.0,0.0), VMatrixInv(:,:), NShort, ZVector(:), 1, CMPLX(0.0,0.0), Solution(:), 1)
-       
+
       ! Copy the derivatives of the coefficients to the PsiDeriv%BVector vector
       PsiDeriv%BVector(:,iEl) = OverIFactor * Solution(1:Psi%NrCfg)
 
@@ -1235,9 +1248,9 @@ MODULE PsiObject
             IF ( ABS(Psi%Bvector(iCfg, iEl)) <= SimplifyThreshold ) THEN
               Solution(Psi%NrCfg+iOcc) = CONJG(Psi%Bvector(iCfg, iEl))*Solution(Psi%NrCfg+iOcc) / &
                                         ( ABS(Psi%Bvector(iCfg, iEl))**2 + SimplifyThreshold**2 )
-            ELSE 
+            ELSE
                Solution(Psi%NrCfg+iOcc) = Solution(Psi%NrCfg+iOcc) / Psi%Bvector(iCfg, iEl)
-            END IF 
+            END IF
          END DO
       END IF
 
@@ -1252,7 +1265,7 @@ MODULE PsiObject
       CALL StopTimer(BVecDerivClock)
       CALL StartTimer(GaussDerivClock)
       CALL StopTimer(GaussDerivClock)
-      
+
       ! If required, return the inverse condition number of the inverted matrices
       IF ( PRESENT( InvMatCondNr ) ) InvMatCondNr(:) = (/ ConditionNr , 0.0 /)
 
@@ -1282,39 +1295,30 @@ MODULE PsiObject
       IF ( ALLOCATED(CMask) ) DEALLOCATE( CMask )
       ALLOCATE( CMask(Psi%NrPrimGau) )
 
-!       IF ( SimplifyCoefficients ) THEN 
-!       
-!          ! Put at the beginning of the vector those elements which will be included in the inversion
-!          k = 0
-!          DO iConf = 1, Psi%NrCfg
-!             IF ( ABS(Psi%Bvector(iConf, 1)) >= 0. ) THEN
-!                k = k+1
-!                CMask( (k-1)*Psi%GDim+1:k*Psi%GDim ) = (/ ( (iConf-1)*Psi%GDim+j, j = 1,Psi%GDim ) /)
-!             END IF
-!          END DO
-!          NInv = k*Psi%GDim
-! 
-!          ! the rest of the Cmatrix indices are put at the end of the vector, beyond the NInv index
-!          DO iConf = 1, Psi%NrCfg
-!             IF ( ABS(Psi%Bvector(iConf, 1)) < 0. ) THEN
-!                k = k+1
-!                CMask( (k-1)*Psi%GDim+1:k*Psi%GDim ) = (/ ( (iConf-1)*Psi%GDim+j, j = 1,Psi%GDim ) /)
-!             END IF
-!          END DO
-!       
-!       ELSE 
-      
-      IF ( .NOT. FreezeLowPopGaussians ) THEN
+      IF ( FreezeLowCoeffGaussians ) THEN
 
-         NInv = Psi%NrCfg*Psi%GDim
+         ! Put at the beginning of the vector those elements which will be included in the inversion
+         k = 0
          DO iConf = 1, Psi%NrCfg
-            CMask( (iConf-1)*Psi%GDim+1:iConf*Psi%GDim ) = (/ ( (iConf-1)*Psi%GDim+j, j = 1,Psi%GDim ) /)
+            IF ( ABS(Psi%Bvector(iConf, 1)) >= CoeffMinThreshold ) THEN
+               k = k+1
+               CMask( (k-1)*Psi%GDim+1:k*Psi%GDim ) = (/ ( (iConf-1)*Psi%GDim+j, j = 1,Psi%GDim ) /)
+            END IF
+         END DO
+         NInv = k*Psi%GDim
+
+         ! the rest of the Cmatrix indices are put at the end of the vector, beyond the NInv index
+         DO iConf = 1, Psi%NrCfg
+            IF ( ABS(Psi%Bvector(iConf, 1)) < CoeffMinThreshold ) THEN
+               k = k+1
+               CMask( (k-1)*Psi%GDim+1:k*Psi%GDim ) = (/ ( (iConf-1)*Psi%GDim+j, j = 1,Psi%GDim ) /)
+            END IF
          END DO
 
-      ELSE
+      ELSE IF ( FreezeLowPopGaussians ) THEN
 
          ! Compute Mulliken populations of the gaussian configurations
-         Populations = WFGauPopulations( Psi, 1 ) 
+         Populations = WFGauPopulations( Psi, 1 )
 
          ! Put at the beginning of the vector those elements which will be included in the inversion
          k = 0
@@ -1333,10 +1337,15 @@ MODULE PsiObject
                CMask( (k-1)*Psi%GDim+1:k*Psi%GDim ) = (/ ( (iConf-1)*Psi%GDim+j, j = 1,Psi%GDim ) /)
             END IF
          END DO
-      
+
+      ELSE
+
+         NInv = Psi%NrCfg*Psi%GDim
+         DO iConf = 1, Psi%NrCfg
+            CMask( (iConf-1)*Psi%GDim+1:iConf*Psi%GDim ) = (/ ( (iConf-1)*Psi%GDim+j, j = 1,Psi%GDim ) /)
+         END DO
+
       END IF
-      
-!       END IF
 
    END SUBROUTINE FixGaussianConfigurationsWithSmallPopulations
 
@@ -1511,8 +1520,8 @@ MODULE PsiObject
                ELSE IF ( Psi1%WFType == vMCG_MULTISET ) THEN
                   ! State specific rho element
                   Rho = CONJG(Psi1%Bvector(Cfg1, GauSet)) * Psi2%Bvector(Cfg2, GauSet)
-               END IF 
-               
+               END IF
+
                ! Compute overlap by summing rho * gaussian overlap
                WFOverlap = WFOverlap + Rho * GauConf_Overlap( Psi1%GaussPar(:, g1Start:g1End, GauSet), &
                                                               Psi2%GaussPar(:, g2Start:g2End, GauSet) )
@@ -1521,7 +1530,7 @@ MODULE PsiObject
          END DO ! loop over Cfg2
 
       END DO
-      
+
    END FUNCTION WFOverlap
 
 
@@ -1562,7 +1571,7 @@ MODULE PsiObject
 
          ! Distance is Norm(Psi1) + Norm(Psi2) - 2 Re Ovlp(Psi1, Psi2)
          WFDifference = SQRT( ABS(WFNorm( Psi1 )**2 + WFNorm( Psi2 )**2 - 2.0 * REAL(WFOverlap( Psi1, Psi2 ))) )
-         
+
       ELSE   ! In this case we need to cycle over all the numbers of the wavefunction
 
          ! Loop over all the complex numbers in the Bvector array
@@ -1807,7 +1816,7 @@ MODULE PsiObject
 !> @param   PsiTar           WaveFunct target of the copy process
 !> @param   PsiSrc           WaveFunct source of the copy process
 !> @param   DeltaPsi         Changes of the wavefunction
-!> @param   Coeffs           Corresponding weights 
+!> @param   Coeffs           Corresponding weights
 !*******************************************************************************
    SUBROUTINE PsiPlusDeltaPsi( PsiTar, PsiSrc, DeltaPsi, Coeffs )
       IMPLICIT NONE
@@ -1816,20 +1825,20 @@ MODULE PsiObject
       TYPE(Derivative), DIMENSION(:), INTENT(IN)  :: DeltaPsi
       REAL, DIMENSION(:), INTENT(IN)              :: Coeffs
       INTEGER :: i
-      
+
       ! Also here the compatibility of PsiTar, PsiSrc and DeltaPsi is not checked...
       ! later maybe I will add the check, for the time being paying attentio to psi definitions
 
       ! Initialize PsiTar with PsiSrc
       PsiTar%Bvector   = PsiSrc%Bvector
       PsiTar%GaussPar  = PsiSrc%GaussPar
-      
+
       ! Increment PsiTar with the DeltaPsi, weighted by the input coefficients
       DO i = 1, SIZE(DeltaPsi)
          PsiTar%Bvector   = PsiTar%Bvector  + Coeffs(i) * DeltaPsi(i)%Bvector
          PsiTar%GaussPar  = PsiTar%GaussPar + Coeffs(i) * DeltaPsi(i)%GaussPar
       END DO
-      
+
       ! Update the components of the WaveFunct instance
       CALL  UpdateWaveFunctInstance( PsiTar  )
 
@@ -2053,7 +2062,7 @@ MODULE PsiObject
 
    END FUNCTION PsiPrimMoment
 
-   
+
 !*******************************************************************************
 !          GetOperatorMatrix
 !*******************************************************************************

@@ -154,8 +154,11 @@ PROGRAM sarastro
    ! Integrator setup for Runge-Kutta 4(5)
    CALL SetupRungeKutta45( UseFixedSteps, MinStep=MinIntegrationStep, MaxStep=MaxIntegrationStep, InpTolerance=ErrorTolerance )
    
-   ! setup the equations of motion and optionally freeze gaussians with small/large populations 
-   IF ( FreezeLowPopGaussians ) THEN
+   ! setup the equations of motion and optionally freeze gaussians with small-large populations / small coefficients
+   ! the condition on the coefficient has priority over the condition on populations
+   IF ( FreezeLowCoeffGaussians ) THEN
+      CALL EquationsOfMotionSetup( EquationType, SimplifyCoefficients, InpCoeffThreshold=CoeffMinThreshold )
+   ELSE IF ( FreezeLowPopGaussians ) THEN
       CALL EquationsOfMotionSetup( EquationType, SimplifyCoefficients, (/ PopMinThreshold, PopMaxThreshold /) )
    ELSE
       CALL EquationsOfMotionSetup( EquationType, SimplifyCoefficients )

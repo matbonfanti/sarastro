@@ -116,6 +116,12 @@ MODULE SharedData
       !> relevant threshold of the type of regularization chosen
       REAL :: CMatrixRegValue, OvMatrixRegValue
 
+      ! Freeze gaussians with low coefficients
+      !> logical variable to activate the freezing of the low-coefficients gaussians
+      LOGICAL ::  FreezeLowCoeffGaussians
+      !> thresholds that define which gaussian to freeze
+      REAL    ::  CoeffMinThreshold
+
       ! Freeze gaussians with low populations 
       !> logical variable to activate the freezing of the low-populated gaussians
       LOGICAL ::  FreezeLowPopGaussians
@@ -126,7 +132,7 @@ MODULE SharedData
       INTEGER :: EquationType
       !> Logical flag, when true coeff.s are simplified from the parameter equations
       LOGICAL :: SimplifyCoefficients
-      
+
 !=============================================================================================================
    CONTAINS
 !=============================================================================================================
@@ -223,6 +229,13 @@ MODULE SharedData
       CALL SetFieldFromInput( InputData, "cmatrix_eps", CMatrixRegValue, 1.E-6 )
       CALL SetFieldFromInput( InputData, "ovmatrix_eps", OvMatrixRegValue, 1.E-6 )
 
+      ! define whether to activate the freezing of the gaussian with low coefficients
+      CALL  SetFieldFromInput( InputData, "freeze_lowcoeffgau", FreezeLowCoeffGaussians, .FALSE. )
+      ! define the corresponding thresholds
+      IF ( FreezeLowCoeffGaussians )  THEN
+         CALL SetFieldFromInput( InputData, "coeffmin_threshold", CoeffMinThreshold, 1.E-15 )
+      END IF
+
       ! define whether to activate the freezing of the gaussian with low populations 
       CALL SetFieldFromInput( InputData, "freeze_lowpopgau", FreezeLowPopGaussians, .FALSE. )
       ! define the corresponding thresholds 
@@ -236,7 +249,7 @@ MODULE SharedData
       
       ! define if the coefficients are simplified from the parameter equations
       CALL SetFieldFromInput( InputData, "eom_simplifycoeff", SimplifyCoefficients, .FALSE. )
-      
+
       ! Close the input file
       CALL CloseFile( InputData )
 
@@ -250,6 +263,12 @@ MODULE SharedData
       CALL ERROR( PotentialApproxOrder == POTAPPROX_FULL .AND. HamiltonianOpDefine == HAMILTONIAN_DDYN , &
        " ReadInputFile: full potential not available for direct dynamics run ", ERR_WRONG_INP )
 
+      ! only one of the two options can be active
+      IF ( FreezeLowCoeffGaussians .AND. FreezeLowPopGaussians ) THEN
+         CALL ShowWarning( " ReadInputFile: only one of the two options ''freeze_lowcoeffgau'' and ''freeze_lowpopgau'' can be active, " // &
+                           " setting freeze_lowpopgau to false ")
+         FreezeLowPopGaussians = .FALSE.
+      END IF
 
       ! PRINT TO OUTPUT THE DEFINED VALUES OF THE VARIABLES
 
