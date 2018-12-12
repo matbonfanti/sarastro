@@ -40,16 +40,19 @@ PROGRAM sarastro
    !*************************************************************
 
    PRINT "(/,     '                    ==============================')"
-   PRINT "(       '                               _________          ')"
+   PRINT "(       '                               sarastro          ')"
    PRINT "(       '                    ==============================',/)"
    PRINT "(       '                       Author: Matteo Bonfanti'      )"
    PRINT "(       '                       Release: ',A)", VERSIONTAG
    PRINT "(       '                       Compilation: ',A,1X,A,/)", __DATE__, __TIME__
 
-   PRINT "(       '                       << ______________________      ')"
-   PRINT "(       '                         _______________________      ')"
-   PRINT "(       '                        _______________________... >> '/)"
-   PRINT "(       '                      [__________________________]  ',2/)"
+   PRINT "(       '                    << In diesen heil'gen Hallen            ')"
+   PRINT "(       '                       Kennt man die Rache nicht.           ')"
+   PRINT "(       '                      Und ist ein Mensch gefallen,          ')"
+   PRINT "(       '                      Fuehrt Liebe ihn zur Pflicht.         ')"
+   PRINT "(       '                     Dann wandelt er an Freundes Hand       ')"
+   PRINT "(       '                   Vergnuegt und froh ins bess're Land. >>  '/)"
+   PRINT "(       '                    [Die Zauberfloete, Act II, Scene III]   ',2/)"
 
    ! Set timers
    CALL InternalTimersSetup( )
