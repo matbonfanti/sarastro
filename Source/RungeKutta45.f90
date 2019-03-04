@@ -46,8 +46,9 @@ MODULE RungeKutta45
    PUBLIC :: DisposeRungeKutta45           !< deallocate memory and close open i/o units
 
    ! Format of numbers in integrator.log file
-   CHARACTER(100), PARAMETER :: LogNumbersFormat = '(I10,1X,I7,1X,A6,2X,E23.16,2X,E23.16,2X,E23.16)'
-   CHARACTER(100), PARAMETER :: AddNumbersFormat = '(2X,E23.16)'
+   CHARACTER(100), PARAMETER :: LogNumbersFormat  = '(I10,1X,I7,1X,A6,2X,E23.16,2X,E23.16,2X,E23.16)'
+   CHARACTER(100), PARAMETER :: LogNumbersFormat2 = '(E23.16,2X,E23.16)'
+   CHARACTER(100), PARAMETER :: AddNumbersFormat  = '(2X,E23.16)'
 
    LOGICAL, SAVE :: PropagationIsSetup = .FALSE.      !< Logical flag to check whether the module is ready or not
 
@@ -83,6 +84,8 @@ MODULE RungeKutta45
 
    ! unit for integration log file
    INTEGER, SAVE :: LogUnit
+   ! unit for time step analysis
+   INTEGER, SAVE :: TStepUnit
 
 
    CONTAINS
@@ -143,6 +146,15 @@ MODULE RungeKutta45
       WRITE(LogUnit,'(2X,A23)',ADVANCE="no") "cmatrix_inv-condnr"
       WRITE(LogUnit,'(2X,A23)',ADVANCE="no") "overlap_max"
       WRITE(LogUnit,'()')
+
+      ! Define an IO unit for printig log info on accepted steps
+      TStepUnit = LookForFreeUnit()
+      ! Open unit and write header of the file
+      OPEN( FILE="accepted_steps.log", UNIT=TStepUnit )
+      WRITE(TStepUnit,'("#",A23,2X,A23)',ADVANCE="no") "stepsize", "error"
+      WRITE(TStepUnit,'(2X,A23)',ADVANCE="no") "overlap_inv-condnr"
+      WRITE(TStepUnit,'(2X,A23)',ADVANCE="no") "cmatrix_inv-condnr"
+      WRITE(TStepUnit,'()')
 
       ! Define coefficients of RungeKutta45 integrator
       SELECT CASE( RK45_Type )
@@ -305,6 +317,12 @@ MODULE RungeKutta45
                WRITE(LogUnit,AddNumbersFormat,ADVANCE="no") MaxOverlap
                WRITE(LogUnit,'()')
 
+               ! Print info on accepted step to log file
+               WRITE(TStepUnit,LogNumbersFormat2,ADVANCE="no") tStep/MyConsts_fs2AU, ErrorEst
+               WRITE(TStepUnit,AddNumbersFormat,ADVANCE="no") InverseCondition(1)
+               WRITE(TStepUnit,AddNumbersFormat,ADVANCE="no") InverseCondition(2)
+               WRITE(TStepUnit,'()')
+
                ! Adapt the time step with respect to the remaining time left for the integration period
                ! and store the new time step in tStep for the following time step
                IF ( .NOT. KeepStepFixed )  tStep = ConfrontStepWithRemainingTime( NewStepSize, EndTime-ActualTime )
@@ -314,7 +332,7 @@ MODULE RungeKutta45
             ELSE
 
                ! Increment the counter of the rejected time steps
-               TotalRejectNrRK45 = TotalRejectNrRK45 + 1 
+               TotalRejectNrRK45 = TotalRejectNrRK45 + 1
                ! Print info on failed step attempt to log file
                WRITE(LogUnit,LogNumbersFormat,ADVANCE="no") TotalNrRK45, nAttempts, "reject", &
                                              tStep/MyConsts_fs2AU, ErrorEst, ActualTime/MyConsts_fs2AU
@@ -363,11 +381,12 @@ MODULE RungeKutta45
 
       ! CLOSE LOG UNIT
       CLOSE( UNIT=LogUnit )
+      CLOSE( UNIT=TStepUnit )
 
       WRITE(*,200) TotalRejectNrRK45+TotalNrRK45, TotalNrRK45, TotalRejectNrRK45, &
                    ActualTime/REAL(TotalNrRK45)/MyConsts_fs2AU, &
                    ActualTime/REAL(TotalRejectNrRK45+TotalNrRK45)/MyConsts_fs2AU
-      
+
       ! Propagation is now undefined
       PropagationIsSetup = .FALSE.
 
@@ -377,7 +396,7 @@ MODULE RungeKutta45
                   " ** rejected                           = ",             I20   ,/, &
                   " Average accepted time step /fs        = ",             F20.8 ,/, &
                   " Average overall tme step /fs          = ",             F20.8 )
-                  
+
    END SUBROUTINE DisposeRungeKutta45
 
 
