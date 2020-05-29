@@ -38,7 +38,7 @@ for d in DirList:
 
    # read integration step
    integdata = np.loadtxt(os.path.join(d,"integrator.log"), dtype="S", usecols=(3,5), skiprows=2)[::10]
-   integdata = zip(*integdata)
+   integdata = list(zip(*integdata))
    stepsize_y = [ float(t) for t in  integdata[0] ]
    stepsize_x = [ float(t) for t in  integdata[1] ]
    average = sum(stepsize_y)/len(stepsize_y) 
@@ -49,7 +49,7 @@ for d in DirList:
    # read energy over time
    expectdata = np.loadtxt(os.path.join(d,"expectations.dat"), dtype="float", usecols=(0,1,2)  ) 
    if isinstance(expectdata[0], np.ndarray):
-      expectdata = zip(*expectdata)
+      expectdata = list(zip(*expectdata))
       norm_x = [ float(t) for t in  expectdata[0] ]
       norm_y = [ (float(t)-1.0)*1000. for t in  expectdata[1] ]
       energy_x = [ float(t) for t in  expectdata[0] ]

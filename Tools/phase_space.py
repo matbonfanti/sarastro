@@ -39,7 +39,7 @@ n = 0
 for d in DirList:
 
    dofdata = np.loadtxt(os.path.join(d,DofFileName))
-   dofdata = zip(*dofdata)
+   dofdata = list(zip(*dofdata))
 
    time = dofdata[0]
    n = 0

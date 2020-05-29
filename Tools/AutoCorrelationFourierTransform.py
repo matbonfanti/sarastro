@@ -6,7 +6,7 @@ import os
 from scipy.interpolate import interp1d
 from scipy.optimize import bisect
 
-filtertime = 200.  # fs
+filtertime = 1000.  # fs
 
 # list of colors
 Colors = [ "blue", "green", 'red', 'magenta', 'cyan', 'black' ]
