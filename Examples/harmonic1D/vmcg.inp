@@ -1,0 +1,28 @@
+
+n                 : 11 
+gdim              : 1
+
+hamiltonian       : hamil.op
+
+read_avec         : bvec_N_15.inp
+read_gaussians    : gauss_N_15.inp
+
+maxtime           :  500.
+maxstep           :  1.0 
+minstep           :  1.00E-12
+writetime         :  1.0
+
+use_fixed_steps   : false
+tolerance         : 1.E-06
+cmatrix_reg_type  : 1
+ovmatrix_reg_type : 1
+cmatrix_eps       : 1.0E-06 
+ovmatrix_eps      : 1.0E-06
+
+freeze_lowpopgau : false 
+popmin_threshold : 1.E-15
+popmax_threshold : 1.E+99
+
+eom_type : 1
+eom_simplifycoeff : false
+
