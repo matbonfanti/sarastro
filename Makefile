@@ -289,7 +289,7 @@ AR 			= ar cr
 #----------------------------------------------------------------------------
 
 # Link objects to the produce the executable file
-${EXENAME} : ${SRCDIR}/Main.f90 ${OBJS}
+${EXENAME} : ${SRCDIR}/Main.f90 ${OBJS} directories
 	${COMPILE} ${PREPROCESS} ${SRCDIR}/Main.f90
 	${LINK} ${EXEDIR}/$@ Main.o $(OBJS) ${LIBFLG}
 	rm Main.o
@@ -298,7 +298,7 @@ ${EXENAME} : ${SRCDIR}/Main.f90 ${OBJS}
 all : ${OBJS}
 
 # Make a target object file by preprocessing and compiling the fortran code
-${OBJDIR}/%.o : ${SRCDIR}/%.f90
+${OBJDIR}/%.o : ${SRCDIR}/%.f90 directories
 	${COMPILE} ${PREPROCESS} ${SRCDIR}/$*.f90
 	cp -p $*.o $(shell echo $* | tr A-Z a-z).mod ${OBJDIR}
 	rm $*.o $(shell echo $* | tr A-Z a-z).mod
