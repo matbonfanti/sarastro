@@ -16,7 +16,7 @@ LOGNAME = vmcg.log
 FC = gfortran
 
 # Debugging options ( yes or no )
-DEBUG = yes     
+DEBUG = no
 
 # Optimization level
 OPTLEVEL = 3
